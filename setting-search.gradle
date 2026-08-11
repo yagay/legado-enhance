@@ -1,4 +1,4 @@
-def generatedCatalog = file('src/main/java/io/legado/app/enhance/settingssearch/GeneratedSettingCatalog.kt')
+def generatedCatalog = file("${project.rootDir}/modules/legado-enhance/java/io/legado/app/enhance/settingssearch/GeneratedSettingCatalog.kt")
 
 def settingPages = [
     [key: 'other', title: 'setting', destination: 'Other', file: 'ui/config/otherConfig/OtherConfigScreen.kt'],

@@ -149,8 +149,6 @@ object GeneratedSettingCatalog {
             GeneratedSettingSpec("only_latest_backup_t", R.string.only_latest_backup_t, R.string.only_latest_backup_s, 1),
         )),
         GeneratedSettingPage("custom", R.string.custom_config_title, SettingDestination.Custom, listOf(
-            GeneratedSettingSpec("auto_backup_on_background", R.string.auto_backup_on_background, R.string.auto_backup_on_background_summary, 0),
-            GeneratedSettingSpec("auto_backup_on_background_interval", R.string.auto_backup_on_background_interval, null, 0),
             GeneratedSettingSpec("backup_export_books", R.string.backup_export_books, null, 0),
             GeneratedSettingSpec("restore_import_books", R.string.restore_import_books, null, 0),
             GeneratedSettingSpec("export_group_title", R.string.export_group_title, R.string.export_group_summary, 0),
