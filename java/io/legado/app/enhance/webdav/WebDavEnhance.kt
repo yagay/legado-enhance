@@ -18,6 +18,10 @@ import android.content.Context
 import kotlinx.coroutines.Dispatchers.IO
 import kotlinx.coroutines.withContext
 import splitties.init.appCtx
+import io.legado.app.utils.LogUtils
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.currentCoroutineContext
+import java.io.File
 import java.net.URL
 
 object WebDavEnhance {
@@ -55,6 +59,46 @@ object WebDavEnhance {
             }
             builder.build().toString()
         }.getOrNull()
+    }
+
+    /**
+     * WebDAV 智能导出：比对大小，跳过重复上传
+     */
+    suspend fun exportWebDavSmart(uri: android.net.Uri, fileName: String, localSize: Long) {
+        if (!io.legado.app.utils.NetworkUtils.isAvailable()) {
+            LogUtils.d("AppWebDav", "网络不可用，跳过导出 $fileName")
+            return
+        }
+        val auth = AppWebDav.authorization
+        if (auth == null) {
+            LogUtils.d("AppWebDav", "authorization 为空，正在尝试更新配置...")
+            AppWebDav.upConfig()
+        }
+        val finalAuth = AppWebDav.authorization ?: run {
+            AppLog.put("WebDAV 导出失败：未配置账号信息", toast = true)
+            return
+        }
+        try {
+            val putUrl = AppWebDav.exportsWebDavUrl + fileName
+            val webDav = WebDav(putUrl, finalAuth)
+            val cloudFile = webDav.getWebDavFile()
+            if (cloudFile != null && cloudFile.size >= localSize) {
+                LogUtils.d("AppWebDav", "跳过上传 $fileName: 云端大小 ${cloudFile.size} >= 本地大小 $localSize")
+                return
+            }
+            LogUtils.d("AppWebDav", "开始上传 $fileName 到 WebDAV...")
+            webDav.upload(uri, "text/plain")
+            LogUtils.d("AppWebDav", "上传完成 $fileName")
+        } catch (e: Exception) {
+            currentCoroutineContext().ensureActive()
+            if (e is io.legado.app.lib.webdav.ObjectNotFoundException) {
+                LogUtils.d("AppWebDav", "云端文件不存在，直接上传 $fileName")
+                val putUrl = AppWebDav.exportsWebDavUrl + fileName
+                WebDav(putUrl, finalAuth).upload(uri, "text/plain")
+            } else {
+                AppLog.put("WebDAV 智能导出失败\n${e.localizedMessage}", e, true)
+            }
+        }
     }
 
     /**

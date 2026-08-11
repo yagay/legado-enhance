@@ -34,7 +34,7 @@ fun DiscoverySuiteScreen(
     onIntent: (ExploreIntent) -> Unit,
     onOpenExploreShow: (title: String?, sourceUrl: String, exploreUrl: String?) -> Unit,
     onBookClick: (SearchBook, String?) -> Unit,
-    paddingValues: PaddingValues
+    paddingValues: PaddingValues,
 ) {
     val suite = state.enhance.selectedSuite
     val listState = rememberLazyListState()
@@ -91,8 +91,9 @@ fun DiscoverySuiteScreen(
 
             suite.widgets.sortedBy { it.order }.forEach { widget ->
                 val isMainBookWidget = widget.id == mainBookWidget?.id
-                val books = if (isMainBookWidget && state.enhance.suiteSearchBooks != null) {
-                    state.enhance.suiteSearchBooks!!
+                val suiteSearchBooks = state.enhance.suiteSearchBooks
+                val books = if (isMainBookWidget && suiteSearchBooks != null) {
+                    suiteSearchBooks
                 } else {
                     state.enhance.widgetBooks[widget.id] ?: persistentListOf()
                 }
@@ -204,7 +205,7 @@ fun DiscoverySuiteScreen(
                                         }
                                         if (chunk.size < widget.gridCount) {
                                             repeat(widget.gridCount - chunk.size) {
-                                                androidx.compose.foundation.layout.Spacer(modifier = Modifier.weight(1f))
+                                                Spacer(modifier = Modifier.weight(1f))
                                             }
                                         }
                                     }

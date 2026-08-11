@@ -45,7 +45,7 @@ data class EnhanceState(
     val suiteSearchPage: Int = 1,
     val suiteSearchIsEnd: Boolean = true,
     val widgetPages: ImmutableMap<String, Int> = persistentMapOf(),
-    val widgetIsEnd: ImmutableMap<String, Boolean> = persistentMapOf()
+    val widgetIsEnd: ImmutableMap<String, Boolean> = persistentMapOf(),
 )
 
 class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
@@ -168,7 +168,9 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
         vm.viewModelScope.launch(IO) {
             allSourceKinds = try {
                 vm.exploreRepository.getSourceExploreKinds(defaultSourceUrl)
-            } catch (e: Exception) { emptyList() }
+            } catch (e: Exception) {
+                emptyList()
+            }
 
             rebuildSelectors(suite, defaultSourceUrl)
         }
@@ -299,7 +301,7 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
         }
     }
 
-    private suspend fun rebuildSelectors(suite: DiscoverySuite, defaultSourceUrl: String) {
+    private fun rebuildSelectors(suite: DiscoverySuite, defaultSourceUrl: String) {
         val selectors = mutableListOf<DynamicSelectorUi>()
         val config = DiscoverySuiteStore.load()
         if (allSourceKinds.isEmpty()) return
@@ -365,7 +367,7 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
         }
 
         val finalSelections = selectors
-            .associate { selector -> selector.id to selector.selectedTitle.orEmpty() }
+            .associateBy({ it.id }, { it.selectedTitle.orEmpty() })
             .toMutableMap()
         lastValidUrl?.let { finalSelections["current_url"] = it }
 
