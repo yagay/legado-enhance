@@ -1,0 +1,22 @@
+plugins {
+    alias libs.plugins.android.library
+}
+
+android {
+    namespace = 'io.legado.enhance'
+    compileSdk = compile_sdk_version
+
+    defaultConfig {
+        minSdk = 26
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    sourceSets {
+        main.java.srcDirs = ['core/src/main/java']
+    }
+}
+

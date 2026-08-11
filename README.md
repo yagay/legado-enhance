@@ -1,5 +1,24 @@
 # Legado Enhance (核心增强模块)
 
+> `core/` 是供 `yagay/legado` XML/RecyclerView 版使用的独立核心。仓库根目录原有
+> `java/` 与 `res/` 是历史 MD3/Compose 实现，仅作迁移参考，不参与当前 Gradle 编译。
+
+## yagay/legado 接入
+
+把本仓库完整复制到主项目的 `modules/legado-enhance`，主项目保留以下两项配置：
+
+```groovy
+// settings.gradle
+include ':modules:legado-enhance'
+
+// app/build.gradle
+implementation project(':modules:legado-enhance')
+```
+
+主项目通过 `io.legado.app.enhance.LegadoExploreEnhance` 将自己的 `ExploreKind`
+映射为模块的中立模型。模块不依赖 Legado 的数据库、WebDAV、Fragment、Adapter
+或 ViewModel；书源解析和界面显示继续复用主项目实现。
+
 本仓库作为 `legado-with-MD3` 的核心子模块，旨在以**非侵入性**的方式为 Legado 提供功能增强。其设计哲学是“逻辑解耦、资源隔离”，确保主项目能够随时平滑合并上游更新。
 
 ## 核心架构设计
