@@ -1,41 +1,45 @@
-# Legado Enhance (增强模块)
+# Legado Enhance (核心增强模块)
 
-此项目作为 `legado-with-MD3` 的子模块，专门存放与上游源码存在差异的增强功能、自定义 UI 逻辑及相关资源。
+本仓库作为 `legado-with-MD3` 的核心子模块，旨在以**非侵入性**的方式为 Legado 提供功能增强。其设计哲学是“逻辑解耦、资源隔离”，确保主项目能够随时平滑合并上游更新。
 
-## 目录结构说明
+## 核心架构设计
 
-### 1. 核心逻辑 (`java/io/legado/app/enhance`)
+### 1. 资源隔离 (Resources Isolation)
+所有自定义字符串均存放在 `res/values*/strings_custom.xml` 中。
+*   **规范**: 新增字符串 ID 建议以功能模块名开头（如 `explore_...`），避免与上游 `strings.xml` 冲突。
+*   **引用**: 在 Kotlin 中通过 `io.legado.app.R.string.xxx` 正常引用。
 
-*   **`EnhanceModule.kt`**: 增强功能的依赖注入 (Koin) 模块。
-*   **`explore/`**: 发现页增强功能。
-    *   `builder/`: 自动构建发现页筛选树和过滤器的逻辑。
-    *   `model/`: 发现页瀑布流套件 (DiscoverySuite) 的数据模型。
-    *   `screen/`: 发现页增强层的 Compose 界面。
-    *   `ui/`: 瀑布流布局引擎和自定义 UI 组件。
-    *   `vm/`: 发现页增强层的业务逻辑实现。
-*   **`settingssearch/`**: 设置项搜索与定位增强。
-    *   `GeneratedSettingCatalog.kt`: 由脚本自动生成的设置项索引。
-    *   `GeneratedSettingLocator.kt`: 设置项索引匹配逻辑。
-*   **`ui/`**: 通用 UI 委托。
-    *   `MyViewModelEnhance.kt`: “我的”页面业务逻辑委托（如搜索注册、一键导出等）。
-    *   `SettingScrollEnhance.kt`: 设置项自动滚动定位动画逻辑。
-*   **`webdav/`**: WebDAV 增强。
-    *   `WebDavEnhance.kt`: 增强型 WebDAV 批量导入、导出和远程校验逻辑。
-*   **`model/`**: 持久化设置模型。
-    *   `CustomSettings.kt`: 存放所有自定义功能开关的数据类。
+### 2. 逻辑注入 (Dependency Injection)
+增强功能通过 Koin 进行管理。
+*   **入口**: `EnhanceModule.kt` 定义了所有增强型的单例（Repositories）和 ViewModel。
+*   **Hook 点**: 主项目在 `App.kt` 的 `startKoin` 中加载 `enhanceModule`。
 
-### 2. 资源文件 (`res/`)
+### 3. 构建自动化 (Build Hooks)
+*   **`setting-search.gradle`**: 一个自定义的 Groovy 脚本，Hook 在 `preBuild` 阶段。它负责扫描整个 `app` 模块的 Compose 代码，自动维护设置项搜索索引。
 
-*   **`values*/strings_custom.xml`**: 存放所有增强功能专用的多语言字符串，与上游 `strings.xml` 物理隔离。
+## 功能模块说明
 
-### 3. 构建脚本
+| 模块名 | 路径 | 核心描述 |
+| :--- | :--- | :--- |
+| **发现页套件** | `explore/` | 实现瀑布流布局、多级类目自动解析及筛选树构建。 |
+| **设置搜索** | `settingssearch/` | 提供全局设置项搜索、精准滚动定位及背景高亮动画。 |
+| **WebDAV 增强** | `webdav/` | 提供书籍实体（EPUB/TXT）的增量云同步逻辑。 |
+| **UI 委托** | `ui/` | 承载“我的”页面逻辑扩展及通用的滚动控制。 |
+| **持久化模型** | `model/` | `CustomSettings.kt` 统一定义所有自定义功能的开关和参数。 |
 
-*   **`setting-search.gradle`**: 自动化构建脚本。在编译前扫描所有设置页的 `*SettingItem`，并生成 `GeneratedSettingCatalog.kt` 索引文件，以支持设置项搜索。
+## 开发规范与维护
 
-## 如何修改
+### 修改已有功能
+1.  **代码修改**: 直接在 `java/` 目录下操作。
+2.  **提交指令**:
+    ```bash
+    cd modules/legado-enhance
+    git add .
+    git commit -m "feat: your description"
+    git push origin main
+    ```
 
-1.  **添加新功能**: 在 `enhance` 下建立对应文件夹，逻辑通过 `EnhanceModule` 注入。
-2.  **修改字符串**: 始终修改 `res/strings_custom.xml`，不要动主项目的 `strings.xml`。
-3.  **同步**:
-    *   在子模块目录修改后，先在此处提交推送。
-    *   在主项目中执行 `git submodule update --remote` 同步。
+### 新增增强模块
+1.  在 `enhance/` 下创建新包。
+2.  在 `EnhanceModule.kt` 中注册相关的单例或 ViewModel。
+3.  在子目录中添加 `README.md` 描述其业务逻辑，方便后续维护。
