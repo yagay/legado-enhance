@@ -16,7 +16,10 @@ android {
     }
 
     sourceSets {
-        main.java.srcDirs = ['core/src/main/java']
+        main {
+            manifest.srcFile 'core/src/main/AndroidManifest.xml'
+            java.srcDirs = ['core/src/main/java']
+            kotlin.srcDirs = ['core/src/main/java']
+        }
     }
 }
-
