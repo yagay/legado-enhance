@@ -1,11 +1,17 @@
-# Legado Enhance (核心增强模块)
+# Legado Enhance Beta
 
-> `core/` 是供 `yagay/legado` XML/RecyclerView 版使用的独立核心。仓库根目录原有
-> `java/` 与 `res/` 是历史 MD3/Compose 实现，仅作迁移参考，不参与当前 Gradle 编译。
+`Beta` 是供 `yagay/legado` XML/RecyclerView 主项目使用的轻量增强核心。
 
-## yagay/legado 接入
+## 设计边界
 
-把本仓库完整复制到主项目的 `modules/legado-enhance`，主项目保留以下两项配置：
+- 模块只维护模型、策略和状态，不绘制发现页或书籍列表。
+- 主项目继续负责主题、XML、Adapter、数据库、WebBook、WebDAV、分页和点击行为。
+- 瀑布流继续使用主项目的 `item_search.xml`；模块只返回封面尺寸和简介行数。
+- 模块不反向依赖 `io.legado.app.*`，方便主项目合并上游更新。
+
+## 接入
+
+把本分支作为主项目的 `modules/legado-enhance`：
 
 ```groovy
 // settings.gradle
@@ -15,50 +21,9 @@ include ':modules:legado-enhance'
 implementation project(':modules:legado-enhance')
 ```
 
-主项目通过 `io.legado.app.enhance.LegadoExploreEnhance` 将自己的 `ExploreKind`
-映射为模块的中立模型。模块不依赖 Legado 的数据库、WebDAV、Fragment、Adapter
-或 ViewModel；书源解析和界面显示继续复用主项目实现。
+## 当前核心
 
-本仓库作为 `legado-with-MD3` 的核心子模块，旨在以**非侵入性**的方式为 Legado 提供功能增强。其设计哲学是“逻辑解耦、资源隔离”，确保主项目能够随时平滑合并上游更新。
+- `ExplorePlanner`：发现分类模式判断、树构建和扁平化。
+- `ExploreResultLayoutPolicy`：主项目原生列表与瀑布流的测量参数。
 
-## 核心架构设计
-
-### 1. 资源隔离 (Resources Isolation)
-所有自定义字符串均存放在 `res/values*/strings_custom.xml` 中。
-*   **规范**: 新增字符串 ID 建议以功能模块名开头（如 `explore_...`），避免与上游 `strings.xml` 冲突。
-*   **引用**: 在 Kotlin 中通过 `io.legado.app.R.string.xxx` 正常引用。
-
-### 2. 逻辑注入 (Dependency Injection)
-增强功能通过 Koin 进行管理。
-*   **入口**: `EnhanceModule.kt` 定义了所有增强型的单例（Repositories）和 ViewModel。
-*   **Hook 点**: 主项目在 `App.kt` 的 `startKoin` 中加载 `enhanceModule`。
-
-### 3. 构建自动化 (Build Hooks)
-*   **`setting-search.gradle`**: 一个自定义的 Groovy 脚本，Hook 在 `preBuild` 阶段。它负责扫描整个 `app` 模块的 Compose 代码，自动维护设置项搜索索引。
-
-## 功能模块说明
-
-| 模块名 | 路径 | 核心描述 |
-| :--- | :--- | :--- |
-| **发现页套件** | `explore/` | 实现瀑布流布局、多级类目自动解析及筛选树构建。 |
-| **设置搜索** | `settingssearch/` | 提供全局设置项搜索、精准滚动定位及背景高亮动画。 |
-| **WebDAV 增强** | `webdav/` | 提供书籍实体（EPUB/TXT）的增量云同步逻辑。 |
-| **UI 委托** | `ui/` | 承载“我的”页面逻辑扩展及通用的滚动控制。 |
-| **持久化模型** | `model/` | `CustomSettings.kt` 统一定义所有自定义功能的开关和参数。 |
-
-## 开发规范与维护
-
-### 修改已有功能
-1.  **代码修改**: 直接在 `java/` 目录下操作。
-2.  **提交指令**:
-    ```bash
-    cd modules/legado-enhance
-    git add .
-    git commit -m "feat: your description"
-    git push origin main
-    ```
-
-### 新增增强模块
-1.  在 `enhance/` 下创建新包。
-2.  在 `EnhanceModule.kt` 中注册相关的单例或 ViewModel。
-3.  在子目录中添加 `README.md` 描述其业务逻辑，方便后续维护。
+历史 MD3/Compose 实现在 `MD3` 分支维护，不进入 `Beta` 的编译和发布内容。
