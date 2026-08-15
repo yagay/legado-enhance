@@ -13,7 +13,7 @@ import io.legado.app.utils.GSON
  * 1. 优先读取 exploreKindsJson() 的原始 children；
  * 2. 原始 JSON 没有真实树结构时才回退 exploreKinds()；
  * 3. 恢复“频道 -> 分类 -> 状态/榜单”矩阵为真实树；
- * 4. 普通 SECTION 不再把所有 Header/URL 平铺给 UI，而是规范成“分组/频道 -> 当前分类”的导航树；
+ * 4. 普通 SECTION 保留 SECTION 语义，运行时按原始 sourceIndex 排序筛选行；
  * 5. TREE 会过滤纯装饰标题、无 URL 且无 children 的伪节点，避免瀑布流出现空行、错层和重复分类；
  * 6. 所有节点始终保持书源原始出现顺序，不按名称重新排序。
  */
@@ -42,7 +42,9 @@ object ModernExploreClassificationEngine {
             ExploreMode.SECTION -> {
                 val sectionTree = buildSectionNavigationTree(base)
                 if (sectionTree.size >= 2) {
-                    Result(sanitizeTree(sectionTree), ExploreMode.TREE)
+                    // 仍以树形数据承载“频道 -> 当前分类”的联动，但保留 SECTION 模式。
+                    // UI 运行时据此像 legado 一样用原始 sourceIndex 对频道/分类/select 行做稳定排序。
+                    Result(sanitizeTree(sectionTree), ExploreMode.SECTION)
                 } else if (sectionTree.size == 1) {
                     // 只有一个标题分段时标题本身不需要成为额外一级，直接显示它下面的分类。
                     Result(sanitizeFlat(sectionTree.first().children.orEmpty()), ExploreMode.FLAT)
