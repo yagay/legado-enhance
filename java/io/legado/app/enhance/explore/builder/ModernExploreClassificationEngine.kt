@@ -9,13 +9,13 @@ import io.legado.app.utils.GSON
 /**
  * 现代发现页分类引擎。
  *
- * 逻辑对齐 yagay/legado:master 的现代布局：
- * 1. 优先从 exploreKindsJson() 读取原始 children，避免扁平化后再猜层级；
- * 2. 只有原始 JSON 没有真正树结构时才回退到 exploreKinds()；
- * 3. 对“男/女频道 -> 分类 -> 状态/榜单”的二维平铺结构恢复成稳定的三级树；
- * 4. 最后识别 TREE / SECTION / FLAT，供 MD3 现代布局使用。
- *
- * 不依赖具体书源名称或域名，保持增强模块可独立维护。
+ * 对齐 yagay/legado:master 的现代发现分类入口：
+ * 1. 优先读取 exploreKindsJson() 的原始 children；
+ * 2. 原始 JSON 没有真实树结构时才回退 exploreKinds()；
+ * 3. 恢复“频道 -> 分类 -> 状态/榜单”矩阵为真实树；
+ * 4. 普通 SECTION 不再把所有 Header/URL 平铺给 UI，而是规范成“分组/频道 -> 当前分类”的导航树；
+ * 5. TREE 会过滤纯装饰标题、无 URL 且无 children 的伪节点，避免瀑布流出现空行、错层和重复分类；
+ * 6. 所有节点始终保持书源原始出现顺序，不按名称重新排序。
  */
 object ModernExploreClassificationEngine {
 
@@ -27,8 +27,32 @@ object ModernExploreClassificationEngine {
     fun classify(flatKinds: List<ExploreKind>, rawJson: String): Result {
         val parsedTree = parseRawTree(rawJson)
         val base = parsedTree.takeIf { it.hasChildrenDeep() } ?: flatKinds
-        val rebuilt = buildSectionMatrixTree(base) ?: base
-        return Result(rebuilt, detectMode(rebuilt))
+
+        // 特殊二维结构优先恢复为真正 TREE。
+        buildSectionMatrixTree(base)?.let { rebuilt ->
+            return Result(sanitizeTree(rebuilt), ExploreMode.TREE)
+        }
+
+        // 原书源已经提供 children：忠实保留路径，只移除 UI 不应显示的伪节点。
+        if (base.hasChildrenDeep()) {
+            return Result(sanitizeTree(base), ExploreMode.TREE)
+        }
+
+        return when (detectMode(base)) {
+            ExploreMode.SECTION -> {
+                val sectionTree = buildSectionNavigationTree(base)
+                if (sectionTree.size >= 2) {
+                    Result(sanitizeTree(sectionTree), ExploreMode.TREE)
+                } else if (sectionTree.size == 1) {
+                    // 只有一个标题分段时标题本身不需要成为额外一级，直接显示它下面的分类。
+                    Result(sanitizeFlat(sectionTree.first().children.orEmpty()), ExploreMode.FLAT)
+                } else {
+                    Result(sanitizeFlat(base), ExploreMode.FLAT)
+                }
+            }
+            ExploreMode.FLAT -> Result(sanitizeFlat(base), ExploreMode.FLAT)
+            ExploreMode.TREE -> Result(sanitizeTree(base), ExploreMode.TREE)
+        }
     }
 
     private fun parseRawTree(json: String): List<ExploreKind> {
@@ -57,6 +81,72 @@ object ModernExploreClassificationEngine {
 
     private fun List<ExploreKind>.hasChildrenDeep(): Boolean =
         any { !it.children.isNullOrEmpty() || it.children.orEmpty().hasChildrenDeep() }
+
+    /**
+     * 与 legado TREE 的 visibleItems 规则一致：
+     * 只有“有子节点”或“有有效目标 URL”的节点进入现代分类 UI。
+     */
+    private fun sanitizeTree(kinds: List<ExploreKind>): List<ExploreKind> {
+        return kinds.mapNotNull { kind ->
+            val children = sanitizeTree(kind.children.orEmpty())
+            when {
+                children.isNotEmpty() -> kind.copy(children = children)
+                !targetUrl(kind).isNullOrBlank() -> kind.copy(children = null)
+                else -> null
+            }
+        }
+    }
+
+    /** 平铺模式仅保留真正可打开分类 URL 的项。 */
+    private fun sanitizeFlat(kinds: List<ExploreKind>): List<ExploreKind> =
+        kinds.filter { !targetUrl(it).isNullOrBlank() }
+            .map { it.copy(children = null) }
+
+    /**
+     * 普通 SECTION 转换为现代布局实际需要的导航结构：
+     *
+     * 男频/分组A
+     *   分类1
+     *   分类2
+     * 女频/分组B
+     *   分类3
+     *   分类4
+     *
+     * Header 自身不作为 URL 项；URL 项只归属它之后、下一个 Header 之前的分组。
+     */
+    private fun buildSectionNavigationTree(kinds: List<ExploreKind>): List<ExploreKind> {
+        data class Section(
+            val header: ExploreKind,
+            val children: MutableList<ExploreKind> = mutableListOf()
+        )
+
+        val sections = mutableListOf<Section>()
+        var current: Section? = null
+        val leading = mutableListOf<ExploreKind>()
+
+        kinds.forEach { kind ->
+            if (isSectionHeader(kind)) {
+                current = Section(kind).also(sections::add)
+                return@forEach
+            }
+            if (!targetUrl(kind).isNullOrBlank()) {
+                if (current == null) leading += kind else current!!.children += kind
+            }
+        }
+
+        val result = mutableListOf<ExploreKind>()
+        if (leading.isNotEmpty()) {
+            result += ExploreKind(title = "分类", children = leading)
+        }
+        sections.filter { it.children.isNotEmpty() }.forEach { section ->
+            result += section.header.copy(
+                url = null,
+                action = null,
+                children = section.children
+            )
+        }
+        return result
+    }
 
     /**
      * 对齐参考源码 buildDiscoverSectionMatrixTree：
@@ -163,9 +253,11 @@ object ModernExploreClassificationEngine {
             compact.endsWith("排行") || compact.endsWith("排行榜")
     }
 
-    private fun targetUrl(kind: ExploreKind): String? =
-        kind.action?.trim()?.takeIf { it.isNotBlank() && !it.equals("null", true) }
+    private fun targetUrl(kind: ExploreKind): String? {
+        val actionTarget = if (kind.type == ExploreKind.Type.url) kind.action else null
+        return actionTarget?.trim()?.takeIf { it.isNotBlank() && !it.equals("null", true) }
             ?: kind.url?.trim()?.takeIf { it.isNotBlank() && !it.equals("null", true) }
+    }
 
     private fun isFullWidth(kind: ExploreKind): Boolean {
         val style = kind.style()
