@@ -4,11 +4,16 @@ import androidx.compose.runtime.Stable
 import androidx.lifecycle.viewModelScope
 import io.legado.app.data.entities.SearchBook
 import io.legado.app.data.entities.rule.ExploreKind
+import io.legado.app.enhance.explore.builder.ModernExploreControlExtractor
+import io.legado.app.enhance.explore.builder.ModernExploreControlExtractor.SelectControl
 import io.legado.app.enhance.explore.model.DiscoverySuite
 import io.legado.app.enhance.explore.model.DiscoverySuiteConfig
 import io.legado.app.enhance.explore.model.DiscoverySuiteStore
 import io.legado.app.enhance.explore.model.DiscoverySuiteWidgetTarget
 import io.legado.app.enhance.explore.model.DiscoverySuiteWidgetType
+import io.legado.app.help.source.clearExploreKindsCache
+import io.legado.app.help.source.exploreKinds
+import io.legado.app.help.source.getExploreInfoMap
 import io.legado.app.ui.main.explore.ExploreEffect
 import io.legado.app.ui.main.explore.ExploreIntent
 import io.legado.app.ui.main.explore.ExploreViewModel
@@ -51,6 +56,7 @@ data class EnhanceState(
 class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
 
     private var allSourceKinds: List<ExploreKind> = emptyList()
+    private var allSourceControls: List<SelectControl> = emptyList()
     private var suiteSearchJob: Job? = null
 
     fun onIntent(intent: ExploreIntent): Boolean {
@@ -59,6 +65,7 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
             is ExploreIntent.SwitchSuite -> switchSuite(intent.suite)
             is ExploreIntent.RefreshSuite -> {
                 allSourceKinds = emptyList()
+                allSourceControls = emptyList()
                 refreshSuite()
             }
             is ExploreIntent.SetSuiteDefaultSource -> setSuiteDefaultSource(intent.sourceUrl)
@@ -171,6 +178,12 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
             } catch (e: Exception) {
                 emptyList()
             }
+            allSourceControls = try {
+                val source = vm.exploreRepository.getBookSource(defaultSourceUrl)
+                ModernExploreControlExtractor.fromFlatKinds(source?.exploreKinds().orEmpty())
+            } catch (e: Exception) {
+                emptyList()
+            }
 
             rebuildSelectors(suite, defaultSourceUrl)
         }
@@ -273,6 +286,10 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
             ?: vm.uiState.value.items.firstOrNull()?.bookSourceUrl
             ?: return
 
+        if (widgetId.startsWith(DYNAMIC_SELECT_PREFIX)) {
+            selectControlTarget(widgetId, target, suite, defaultSourceUrl)
+            return
+        }
         if (!widgetId.startsWith(DYNAMIC_LEVEL_PREFIX)) return
 
         val level = widgetId.removePrefix(DYNAMIC_LEVEL_PREFIX).toIntOrNull() ?: return
@@ -298,6 +315,46 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
 
         vm.viewModelScope.launch(IO) {
             rebuildSelectors(suite, defaultSourceUrl)
+        }
+    }
+
+    private fun selectControlTarget(
+        widgetId: String,
+        target: DiscoverySuiteWidgetTarget,
+        suite: DiscoverySuite,
+        defaultSourceUrl: String
+    ) {
+        val sourceIndex = widgetId.removePrefix(DYNAMIC_SELECT_PREFIX).toIntOrNull() ?: return
+        val control = allSourceControls.firstOrNull { it.sourceIndex == sourceIndex } ?: return
+        val value = target.title
+        if (value !in control.options) return
+        if (vm.uiState.value.enhance.selectedWidgetTargets[widgetId] == value) return
+
+        saveSelection(widgetId, value)
+        vm.updateUiState { state ->
+            state.copy(
+                enhance = state.enhance.copy(
+                    selectedWidgetTargets = (state.enhance.selectedWidgetTargets + (widgetId to value)).toImmutableMap()
+                )
+            )
+        }
+
+        vm.viewModelScope.launch(IO) {
+            try {
+                val source = vm.exploreRepository.getBookSource(defaultSourceUrl) ?: return@launch
+                val key = control.kind.title
+                if (key.isNotBlank()) {
+                    getExploreInfoMap(defaultSourceUrl).apply {
+                        this[key] = value
+                        saveNow()
+                    }
+                }
+                source.clearExploreKindsCache()
+                allSourceKinds = vm.exploreRepository.getSourceExploreKinds(defaultSourceUrl)
+                allSourceControls = ModernExploreControlExtractor.fromFlatKinds(source.exploreKinds())
+                rebuildSelectors(suite, defaultSourceUrl)
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -364,6 +421,33 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
             inheritedTitle = selectedItem.title
             currentLevelItems = selectedItem.children.orEmpty()
             level++
+        }
+
+        allSourceControls.sortedBy { it.sourceIndex }.forEach { control ->
+            val widgetId = "$DYNAMIC_SELECT_PREFIX${control.sourceIndex}"
+            val targets = control.options.map { value ->
+                DiscoverySuiteWidgetTarget(
+                    sourceUrl = defaultSourceUrl,
+                    tagUrl = value,
+                    title = value
+                )
+            }
+            if (targets.isEmpty()) return@forEach
+            val savedTitle = config.lastSelectedTargets["${defaultSourceUrl}_$widgetId"]
+            val stateSelected = vm.uiState.value.enhance.selectedWidgetTargets[widgetId]
+            val selectedTitle = stateSelected
+                ?.takeIf { value -> targets.any { it.title == value } }
+                ?: savedTitle?.takeIf { value -> targets.any { it.title == value } }
+                ?: control.defaultValue?.takeIf { value -> targets.any { it.title == value } }
+                ?: targets.first().title
+
+            selectors += DynamicSelectorUi(
+                id = widgetId,
+                title = control.title,
+                targets = targets.toImmutableList(),
+                selectedTitle = selectedTitle,
+                type = DynamicSelectorUi.SelectorType.TagBar
+            )
         }
 
         val finalSelections = selectors
@@ -696,6 +780,7 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
 
     private companion object {
         const val DYNAMIC_LEVEL_PREFIX = "dynamic_level_"
+        const val DYNAMIC_SELECT_PREFIX = "dynamic_select_"
         val STATUS_SELECTOR_TITLES = setOf(
             "全部", "完结", "连载", "完本", "在更", "已完成", "连载中", "Finished", "Loading"
         )
