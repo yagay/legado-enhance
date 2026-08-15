@@ -6,6 +6,8 @@ import io.legado.app.data.entities.SearchBook
 import io.legado.app.data.entities.rule.ExploreKind
 import io.legado.app.enhance.explore.builder.ModernExploreControlExtractor
 import io.legado.app.enhance.explore.builder.ModernExploreControlExtractor.SelectControl
+import io.legado.app.enhance.explore.builder.ModernExploreClassificationEngine
+import io.legado.app.enhance.explore.model.ExploreMode
 import io.legado.app.enhance.explore.model.DiscoverySuite
 import io.legado.app.enhance.explore.model.DiscoverySuiteConfig
 import io.legado.app.enhance.explore.model.DiscoverySuiteStore
@@ -13,6 +15,7 @@ import io.legado.app.enhance.explore.model.DiscoverySuiteWidgetTarget
 import io.legado.app.enhance.explore.model.DiscoverySuiteWidgetType
 import io.legado.app.help.source.clearExploreKindsCache
 import io.legado.app.help.source.exploreKinds
+import io.legado.app.help.source.exploreKindsJson
 import io.legado.app.help.source.getExploreInfoMap
 import io.legado.app.ui.main.explore.ExploreEffect
 import io.legado.app.ui.main.explore.ExploreIntent
@@ -56,15 +59,19 @@ data class EnhanceState(
 class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
 
     private var allSourceKinds: List<ExploreKind> = emptyList()
+    private var allSourceRawKinds: List<ExploreKind> = emptyList()
+    private var allSourceMode: ExploreMode = ExploreMode.FLAT
     private var allSourceControls: List<SelectControl> = emptyList()
     private var suiteSearchJob: Job? = null
 
     fun onIntent(intent: ExploreIntent): Boolean {
         when (intent) {
-            is ExploreIntent.Search -> {} // Let base handle key update, but enhance handles the action via searchSuiteBooks call in base
+            is ExploreIntent.Search -> {}
             is ExploreIntent.SwitchSuite -> switchSuite(intent.suite)
             is ExploreIntent.RefreshSuite -> {
                 allSourceKinds = emptyList()
+                allSourceRawKinds = emptyList()
+                allSourceMode = ExploreMode.FLAT
                 allSourceControls = emptyList()
                 refreshSuite()
             }
@@ -89,9 +96,7 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
                     sharedCoverKey = intent.sharedCoverKey
                 )
             )
-            is ExploreIntent.ToggleLayoutMode -> {
-                vm.toggleLayoutMode()
-            }
+            is ExploreIntent.ToggleLayoutMode -> vm.toggleLayoutMode()
             else -> return false
         }
         return true
@@ -101,7 +106,6 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
         val config = DiscoverySuiteStore.load()
         val selectedId = DiscoverySuiteStore.getSelectedSuiteId()
         val selectedSuite = config.suites.find { it.id == selectedId } ?: config.suites.firstOrNull()
-
         vm.updateUiState {
             it.copy(
                 enhance = it.enhance.copy(
@@ -110,44 +114,28 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
                 )
             )
         }
-        
         resolveSelectedSourceName()
-        
-        if (selectedSuite != null) {
-            refreshSuite()
-        }
+        if (selectedSuite != null) refreshSuite()
     }
 
-    /**
-     * 根据当前选中的套件和已加载的书源列表，解析出书源名称。
-     * 由于书源列表是异步加载的，该方法会在 init 和 observeExplore 成功后各调用一次。
-     */
     fun resolveSelectedSourceName() {
         val state = vm.uiState.value
         val suite = state.enhance.selectedSuite ?: return
-        
         val source = suite.defaultSourceUrl?.let { url ->
             state.items.find { it.bookSourceUrl == url }
         } ?: state.items.firstOrNull()
-
         val sourceName = source?.bookSourceName
-
         if (sourceName != state.enhance.selectedSourceName) {
-            vm.updateUiState { 
+            vm.updateUiState {
                 it.copy(enhance = it.enhance.copy(selectedSourceName = sourceName))
             }
         }
-
-        if (source != null && state.enhance.dynamicSelectors.isEmpty()) {
-            refreshSuite()
-        }
+        if (source != null && state.enhance.dynamicSelectors.isEmpty()) refreshSuite()
     }
 
     private fun switchSuite(suite: DiscoverySuite) {
         DiscoverySuiteStore.setSelectedSuiteId(suite.id)
-        vm.updateUiState {
-            it.copy(enhance = it.enhance.copy(selectedSuite = suite))
-        }
+        vm.updateUiState { it.copy(enhance = it.enhance.copy(selectedSuite = suite)) }
         resolveSelectedSourceName()
         refreshSuite()
     }
@@ -155,7 +143,6 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
     private fun refreshSuite() {
         val suite = vm.uiState.value.enhance.selectedSuite ?: return
         val defaultSourceUrl = suite.defaultSourceUrl ?: vm.uiState.value.items.firstOrNull()?.bookSourceUrl ?: return
-
         vm.updateUiState {
             it.copy(
                 enhance = it.enhance.copy(
@@ -171,20 +158,28 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
                 )
             )
         }
-
         vm.viewModelScope.launch(IO) {
-            allSourceKinds = try {
-                vm.exploreRepository.getSourceExploreKinds(defaultSourceUrl)
-            } catch (e: Exception) {
+            val source = try {
+                vm.exploreRepository.getBookSource(defaultSourceUrl)
+            } catch (_: Exception) {
+                null
+            }
+            allSourceRawKinds = try {
+                source?.exploreKinds().orEmpty()
+            } catch (_: Exception) {
                 emptyList()
             }
-            allSourceControls = try {
-                val source = vm.exploreRepository.getBookSource(defaultSourceUrl)
-                ModernExploreControlExtractor.fromFlatKinds(source?.exploreKinds().orEmpty())
-            } catch (e: Exception) {
-                emptyList()
+            val classification = try {
+                ModernExploreClassificationEngine.classify(
+                    allSourceRawKinds,
+                    source?.exploreKindsJson().orEmpty()
+                )
+            } catch (_: Exception) {
+                ModernExploreClassificationEngine.Result(allSourceRawKinds, ExploreMode.FLAT)
             }
-
+            allSourceKinds = classification.kinds
+            allSourceMode = classification.mode
+            allSourceControls = ModernExploreControlExtractor.fromFlatKinds(allSourceRawKinds)
             rebuildSelectors(suite, defaultSourceUrl)
         }
     }
@@ -192,20 +187,14 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
     private fun loadMoreWidgetData(widgetId: String) {
         val state = vm.uiState.value
         val enhance = state.enhance
-        val isLoadingNow = enhance.widgetLoading[widgetId] == true
-        val isEndNow = enhance.widgetIsEnd[widgetId] == true
-        if (isLoadingNow || isEndNow) return
-
+        if (enhance.widgetLoading[widgetId] == true || enhance.widgetIsEnd[widgetId] == true) return
         val suite = enhance.selectedSuite ?: return
         val defaultSourceUrl = suite.defaultSourceUrl ?: state.items.firstOrNull()?.bookSourceUrl ?: return
-
         val currentUrl = enhance.selectedWidgetTargets["current_url"] ?: return
         val nextPage = (enhance.widgetPages[widgetId] ?: 1) + 1
-
         vm.updateUiState {
             it.copy(enhance = it.enhance.copy(widgetLoading = (it.enhance.widgetLoading + (widgetId to true)).toImmutableMap()))
         }
-
         vm.viewModelScope.launch(IO) {
             try {
                 val result = vm.exploreBooksUseCase.execute(
@@ -214,7 +203,6 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
                     args = null,
                     page = nextPage
                 )
-
                 if (result.books.isEmpty()) {
                     vm.updateUiState {
                         it.copy(
@@ -226,11 +214,9 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
                     }
                     return@launch
                 }
-
                 vm.updateUiState { s ->
                     val currentBooks = s.enhance.widgetBooks[widgetId] ?: persistentListOf()
                     val newBooksList = (currentBooks + result.books).distinctBy { it.bookUrl }
-
                     s.copy(
                         enhance = s.enhance.copy(
                             widgetBooks = (s.enhance.widgetBooks + (widgetId to newBooksList.toImmutableList())).toImmutableMap(),
@@ -240,7 +226,7 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
                         )
                     )
                 }
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 vm.updateUiState {
                     it.copy(
                         enhance = it.enhance.copy(
@@ -258,11 +244,9 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
         val suite = vm.uiState.value.enhance.selectedSuite ?: return
         val sourceUrl = suite.defaultSourceUrl ?: vm.uiState.value.items.firstOrNull()?.bookSourceUrl ?: return
         val config = DiscoverySuiteStore.load()
-        val key = "${sourceUrl}_$widgetId"
-        val updatedMap = config.lastSelectedTargets + (key to title)
-
-        val newConfig = config.copy(lastSelectedTargets = updatedMap)
-        DiscoverySuiteStore.save(newConfig)
+        DiscoverySuiteStore.save(
+            config.copy(lastSelectedTargets = config.lastSelectedTargets + ("${sourceUrl}_$widgetId" to title))
+        )
     }
 
     private fun updateDiscoverySettings(transform: (DiscoverySuiteConfig) -> DiscoverySuiteConfig) {
@@ -270,52 +254,38 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
         val updated = transform(config)
         DiscoverySuiteStore.save(updated)
         vm.updateUiState { it.copy(enhance = it.enhance.copy(suites = updated.suites.toImmutableList())) }
-        val current = vm.uiState.value.enhance.selectedSuite
-        if (current != null) {
-            val updatedCurrent = updated.suites.find { it.id == current.id }
-            if (updatedCurrent != null) {
-                vm.updateUiState { it.copy(enhance = it.enhance.copy(selectedSuite = updatedCurrent)) }
-                refreshSuite()
-            }
+        val current = vm.uiState.value.enhance.selectedSuite ?: return
+        updated.suites.find { it.id == current.id }?.let { updatedCurrent ->
+            vm.updateUiState { it.copy(enhance = it.enhance.copy(selectedSuite = updatedCurrent)) }
+            refreshSuite()
         }
     }
 
     private fun selectWidgetTarget(widgetId: String, target: DiscoverySuiteWidgetTarget) {
         val suite = vm.uiState.value.enhance.selectedSuite ?: return
-        val defaultSourceUrl = suite.defaultSourceUrl
-            ?: vm.uiState.value.items.firstOrNull()?.bookSourceUrl
-            ?: return
-
+        val defaultSourceUrl = suite.defaultSourceUrl ?: vm.uiState.value.items.firstOrNull()?.bookSourceUrl ?: return
         if (widgetId.startsWith(DYNAMIC_SELECT_PREFIX)) {
             selectControlTarget(widgetId, target, suite, defaultSourceUrl)
             return
         }
         if (!widgetId.startsWith(DYNAMIC_LEVEL_PREFIX)) return
-
         val level = widgetId.removePrefix(DYNAMIC_LEVEL_PREFIX).toIntOrNull() ?: return
         if (vm.uiState.value.enhance.selectedWidgetTargets[widgetId] == target.title) return
-
         saveSelection(widgetId, target.title)
-
         vm.updateUiState { state ->
             val newSelections = state.enhance.selectedWidgetTargets.toMutableMap()
             newSelections[widgetId] = target.title
-
             newSelections.keys
                 .filter { key ->
                     key.startsWith(DYNAMIC_LEVEL_PREFIX) &&
-                            (key.removePrefix(DYNAMIC_LEVEL_PREFIX).toIntOrNull() ?: -1) > level
+                        (key.removePrefix(DYNAMIC_LEVEL_PREFIX).toIntOrNull() ?: -1) > level
                 }
                 .toList()
                 .forEach(newSelections::remove)
-
             newSelections.remove("current_url")
             state.copy(enhance = state.enhance.copy(selectedWidgetTargets = newSelections.toImmutableMap()))
         }
-
-        vm.viewModelScope.launch(IO) {
-            rebuildSelectors(suite, defaultSourceUrl)
-        }
+        vm.viewModelScope.launch(IO) { rebuildSelectors(suite, defaultSourceUrl) }
     }
 
     private fun selectControlTarget(
@@ -329,7 +299,6 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
         val value = target.title
         if (value !in control.options) return
         if (vm.uiState.value.enhance.selectedWidgetTargets[widgetId] == value) return
-
         saveSelection(widgetId, value)
         vm.updateUiState { state ->
             state.copy(
@@ -338,7 +307,6 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
                 )
             )
         }
-
         vm.viewModelScope.launch(IO) {
             try {
                 val source = vm.exploreRepository.getBookSource(defaultSourceUrl) ?: return@launch
@@ -350,8 +318,14 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
                     }
                 }
                 source.clearExploreKindsCache()
-                allSourceKinds = vm.exploreRepository.getSourceExploreKinds(defaultSourceUrl)
-                allSourceControls = ModernExploreControlExtractor.fromFlatKinds(source.exploreKinds())
+                allSourceRawKinds = source.exploreKinds()
+                val classification = ModernExploreClassificationEngine.classify(
+                    allSourceRawKinds,
+                    source.exploreKindsJson()
+                )
+                allSourceKinds = classification.kinds
+                allSourceMode = classification.mode
+                allSourceControls = ModernExploreControlExtractor.fromFlatKinds(allSourceRawKinds)
                 rebuildSelectors(suite, defaultSourceUrl)
             } catch (_: Exception) {
             }
@@ -362,15 +336,12 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
         val selectors = mutableListOf<DynamicSelectorUi>()
         val config = DiscoverySuiteStore.load()
         if (allSourceKinds.isEmpty()) return
-
         var currentLevelItems = allSourceKinds
         var inheritedTitle: String? = null
         var lastValidUrl: String? = null
         var level = 0
-
         val safetyLimit = (countExploreNodes(allSourceKinds) + 1).coerceAtLeast(16)
         var steps = 0
-
         while (currentLevelItems.isNotEmpty() && steps++ < safetyLimit) {
             while (
                 currentLevelItems.size == 1 &&
@@ -383,54 +354,47 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
                 if (currentLevelItems.isEmpty()) break
             }
             if (currentLevelItems.isEmpty()) break
-
+            val visibleItems = currentLevelItems.filter {
+                it.hasChildren() || !it.targetUrl().isNullOrBlank()
+            }
+            if (visibleItems.isEmpty()) break
             val widgetId = "$DYNAMIC_LEVEL_PREFIX$level"
-            val targets = currentLevelItems.map { kind ->
+            val targets = visibleItems.map { kind ->
                 DiscoverySuiteWidgetTarget(
                     sourceUrl = defaultSourceUrl,
                     tagUrl = kind.targetUrl().orEmpty(),
                     title = kind.title
                 )
             }
-            if (targets.isEmpty()) break
-
             val savedTitle = config.lastSelectedTargets["${defaultSourceUrl}_$widgetId"]
             val stateSelected = vm.uiState.value.enhance.selectedWidgetTargets[widgetId]
             val selectedTitle = stateSelected
                 ?.takeIf { title -> targets.any { it.title == title } }
                 ?: savedTitle?.takeIf { title -> targets.any { it.title == title } }
                 ?: targets.first().title
-
-            val selectorTitle = inferSelectorTitle(
-                level = level,
-                items = currentLevelItems,
-                inheritedTitle = inheritedTitle
-            )
-
             selectors += DynamicSelectorUi(
                 id = widgetId,
-                title = selectorTitle,
+                title = inferSelectorTitle(level, visibleItems, inheritedTitle),
                 targets = targets.toImmutableList(),
                 selectedTitle = selectedTitle,
-                type = inferSelectorType(currentLevelItems)
+                type = inferSelectorType(visibleItems)
             )
-
-            val selectedItem = currentLevelItems.firstOrNull { it.title == selectedTitle } ?: break
+            val selectedItem = visibleItems.firstOrNull { it.title == selectedTitle } ?: break
             selectedItem.targetUrl()?.let { lastValidUrl = it }
-
             inheritedTitle = selectedItem.title
             currentLevelItems = selectedItem.children.orEmpty()
             level++
         }
 
-        allSourceControls.sortedBy { it.sourceIndex }.forEach { control ->
+        val controlsForMode = if (allSourceMode == ExploreMode.TREE) {
+            ModernExploreControlExtractor.fromTreeRoot(allSourceRawKinds)
+        } else {
+            allSourceControls
+        }
+        controlsForMode.sortedBy { it.sourceIndex }.forEach { control ->
             val widgetId = "$DYNAMIC_SELECT_PREFIX${control.sourceIndex}"
             val targets = control.options.map { value ->
-                DiscoverySuiteWidgetTarget(
-                    sourceUrl = defaultSourceUrl,
-                    tagUrl = value,
-                    title = value
-                )
+                DiscoverySuiteWidgetTarget(defaultSourceUrl, value, value)
             }
             if (targets.isEmpty()) return@forEach
             val savedTitle = config.lastSelectedTargets["${defaultSourceUrl}_$widgetId"]
@@ -440,7 +404,6 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
                 ?: savedTitle?.takeIf { value -> targets.any { it.title == value } }
                 ?: control.defaultValue?.takeIf { value -> targets.any { it.title == value } }
                 ?: targets.first().title
-
             selectors += DynamicSelectorUi(
                 id = widgetId,
                 title = control.title,
@@ -450,22 +413,27 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
             )
         }
 
-        val finalSelections = selectors
+        val orderedSelectors = if (allSourceMode == ExploreMode.TREE) {
+            selectors
+        } else {
+            selectors.withIndex()
+                .sortedWith(compareBy({ selectorSourceIndex(it.value) }, { it.index }))
+                .map { it.value }
+        }
+        val finalSelections = orderedSelectors
             .associateBy({ it.id }, { it.selectedTitle.orEmpty() })
             .toMutableMap()
         lastValidUrl?.let { finalSelections["current_url"] = it }
-
         vm.updateUiState { state ->
             val preserved = state.enhance.selectedWidgetTargets
                 .filterKeys { key -> !key.startsWith(DYNAMIC_LEVEL_PREFIX) && key != "current_url" }
             state.copy(
                 enhance = state.enhance.copy(
-                    dynamicSelectors = selectors.toImmutableList(),
+                    dynamicSelectors = orderedSelectors.toImmutableList(),
                     selectedWidgetTargets = (preserved + finalSelections).toImmutableMap()
                 )
             )
         }
-
         if (lastValidUrl != null) {
             vm.updateUiState {
                 it.copy(
@@ -481,6 +449,20 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
         }
     }
 
+    private fun selectorSourceIndex(selector: DynamicSelectorUi): Int {
+        if (selector.id.startsWith(DYNAMIC_SELECT_PREFIX)) {
+            return selector.id.removePrefix(DYNAMIC_SELECT_PREFIX).toIntOrNull() ?: Int.MAX_VALUE
+        }
+        val optionTitles = selector.targets.asSequence()
+            .map { cleanExploreTitle(it.title) }
+            .filter { it.isNotBlank() }
+            .toSet()
+        if (optionTitles.isEmpty()) return Int.MAX_VALUE
+        return allSourceRawKinds.indexOfFirst { kind ->
+            cleanExploreTitle(kind.title) in optionTitles
+        }.takeIf { it >= 0 } ?: Int.MAX_VALUE
+    }
+
     private fun countExploreNodes(kinds: List<ExploreKind>): Int {
         var count = 0
         val stack = ArrayDeque<ExploreKind>()
@@ -493,23 +475,11 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
         return count
     }
 
-    private fun inferSelectorTitle(
-        level: Int,
-        items: List<ExploreKind>,
-        inheritedTitle: String?
-    ): String {
+    private fun inferSelectorTitle(level: Int, items: List<ExploreKind>, inheritedTitle: String?): String {
         val cleanTitles = items.map { cleanExploreTitle(it.title) }
-
-        if (cleanTitles.any { it.contains("男频") || it.contains("女频") || it.contains("男生频道") || it.contains("女生频道") }) {
-            return "频道"
-        }
-        if (cleanTitles.count { it in STATUS_SELECTOR_TITLES } >= 2) {
-            return "状态"
-        }
-        if (cleanTitles.count { it in RANK_SELECTOR_TITLES || it.endsWith("榜") || it.contains("排行") } >= 2) {
-            return "榜单"
-        }
-
+        if (cleanTitles.any { it.contains("男频") || it.contains("女频") || it.contains("男生频道") || it.contains("女生频道") }) return "频道"
+        if (cleanTitles.count { it in STATUS_SELECTOR_TITLES } >= 2) return "状态"
+        if (cleanTitles.count { it in RANK_SELECTOR_TITLES || it.endsWith("榜") || it.contains("排行") } >= 2) return "榜单"
         val inherited = cleanExploreTitle(inheritedTitle.orEmpty())
         if (inherited.isNotBlank()) {
             when {
@@ -517,7 +487,6 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
                 inherited in setOf("分类", "频道", "状态", "榜单", "标签", "类型") -> return inherited
             }
         }
-
         return if (level == 0 && items.all { it.isGroupHeader() }) "分组" else "分类"
     }
 
@@ -530,22 +499,19 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
         }
     }
 
-    private fun cleanExploreTitle(title: String): String {
-        return title
-            .replace(Regex("[\\[\\]【】?（）<>《》]"), "")
-            .replace(Regex("[\\p{So}\\p{Sk}]+"), "")
-            .replace(Regex("[༺༻ˇ»«`´ʚɞ]+"), "")
-            .trim()
-    }
+    private fun cleanExploreTitle(title: String): String = title
+        .replace(Regex("[\\[\\]【】?（）<>《》]"), "")
+        .replace(Regex("[\\p{So}\\p{Sk}]+"), "")
+        .replace(Regex("[༺༻ˇ»«`´ʚɞ]+"), "")
+        .trim()
 
     private fun loadBookWidgetData(suite: DiscoverySuite, tagUrl: String, defaultSourceUrl: String) {
         if (tagUrl.isEmpty()) return
         val bookWidgetId = suite.widgets.find {
             it.type == DiscoverySuiteWidgetType.WaterfallBooks.type ||
-                    it.type == DiscoverySuiteWidgetType.BookList.type ||
-                    it.type == DiscoverySuiteWidgetType.HorizontalBooks.type
+                it.type == DiscoverySuiteWidgetType.BookList.type ||
+                it.type == DiscoverySuiteWidgetType.HorizontalBooks.type
         }?.id ?: return
-
         loadWidgetDataWithUrl(bookWidgetId, defaultSourceUrl, tagUrl)
     }
 
@@ -579,11 +545,7 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
         vm.updateUiState { it.copy(enhance = it.enhance.copy(widgetLoading = (it.enhance.widgetLoading + (widgetId to true)).toImmutableMap())) }
         vm.viewModelScope.launch(IO) {
             try {
-                val result = vm.exploreBooksUseCase.execute(
-                    sourceUrl = sourceUrl,
-                    moduleUrl = tagUrl,
-                    args = null
-                )
+                val result = vm.exploreBooksUseCase.execute(sourceUrl = sourceUrl, moduleUrl = tagUrl, args = null)
                 val finalBooks = result.books.distinctBy { it.bookUrl }
                 vm.updateUiState {
                     it.copy(
@@ -595,7 +557,7 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
                         )
                     )
                 }
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 vm.updateUiState { it.copy(enhance = it.enhance.copy(widgetLoading = (it.enhance.widgetLoading + (widgetId to false)).toImmutableMap())) }
             }
         }
@@ -603,7 +565,6 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
 
     fun searchSuiteBooks(query: String) {
         suiteSearchJob?.cancel()
-
         if (query.isBlank()) {
             vm.updateUiState {
                 it.copy(
@@ -618,26 +579,14 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
             }
             return
         }
-
         suiteSearchJob = vm.viewModelScope.launch {
             delay(300)
-
             val state = vm.uiState.value
             if (state.layoutMode != 1 || state.searchKey.trim() != query) return@launch
-
             val suite = state.enhance.selectedSuite ?: return@launch
-            val sourceUrl = suite.defaultSourceUrl
-                ?: state.items.firstOrNull()?.bookSourceUrl
-                ?: return@launch
-
-            val source = try {
-                vm.exploreRepository.getBookSource(sourceUrl)
-            } catch (_: Exception) {
-                null
-            }
-
+            val sourceUrl = suite.defaultSourceUrl ?: state.items.firstOrNull()?.bookSourceUrl ?: return@launch
+            val source = try { vm.exploreRepository.getBookSource(sourceUrl) } catch (_: Exception) { null }
             val localMatches = filterLoadedSuiteBooks(state, suite, query)
-
             if (!source?.searchUrl.isNullOrBlank()) {
                 vm.updateUiState {
                     it.copy(
@@ -650,7 +599,6 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
                         )
                     )
                 }
-
                 try {
                     val result = vm.exploreBooksUseCase.execute(
                         sourceUrl = sourceUrl,
@@ -661,8 +609,7 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
                     )
                     if (vm.uiState.value.searchKey.trim() == query) {
                         vm.updateUiState {
-                            val merged = (localMatches + result.books)
-                                .distinctBy { book -> book.bookUrl }
+                            val merged = (localMatches + result.books).distinctBy { book -> book.bookUrl }
                             it.copy(
                                 enhance = it.enhance.copy(
                                     suiteSearchBooks = merged.toImmutableList(),
@@ -689,19 +636,17 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
                         }
                     }
                 }
-            } else {
-                if (vm.uiState.value.searchKey.trim() == query) {
-                    vm.updateUiState {
-                        it.copy(
-                            enhance = it.enhance.copy(
-                                suiteSearchBooks = localMatches.toImmutableList(),
-                                suiteSearchLoading = false,
-                                suiteSearchRemote = false,
-                                suiteSearchPage = 1,
-                                suiteSearchIsEnd = true
-                            )
+            } else if (vm.uiState.value.searchKey.trim() == query) {
+                vm.updateUiState {
+                    it.copy(
+                        enhance = it.enhance.copy(
+                            suiteSearchBooks = localMatches.toImmutableList(),
+                            suiteSearchLoading = false,
+                            suiteSearchRemote = false,
+                            suiteSearchPage = 1,
+                            suiteSearchIsEnd = true
                         )
-                    }
+                    )
                 }
             }
         }
@@ -714,22 +659,18 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
     ): List<SearchBook> {
         val bookWidgetId = suite.widgets.firstOrNull { widget ->
             widget.type == DiscoverySuiteWidgetType.WaterfallBooks.type ||
-                    widget.type == DiscoverySuiteWidgetType.BookList.type ||
-                    widget.type == DiscoverySuiteWidgetType.HorizontalBooks.type
+                widget.type == DiscoverySuiteWidgetType.BookList.type ||
+                widget.type == DiscoverySuiteWidgetType.HorizontalBooks.type
         }?.id
-
-        val loadedBooks = bookWidgetId
-            ?.let { state.enhance.widgetBooks[it] }
-            .orEmpty()
-
+        val loadedBooks = bookWidgetId?.let { state.enhance.widgetBooks[it] }.orEmpty()
         val q = query.lowercase()
         return loadedBooks.filter { book ->
             book.name.contains(query, ignoreCase = true) ||
-                    book.author.contains(query, ignoreCase = true) ||
-                    book.kind.orEmpty().contains(query, ignoreCase = true) ||
-                    book.intro.orEmpty().contains(query, ignoreCase = true) ||
-                    book.latestChapterTitle.orEmpty().contains(query, ignoreCase = true) ||
-                    book.wordCount.orEmpty().lowercase().contains(q)
+                book.author.contains(query, ignoreCase = true) ||
+                book.kind.orEmpty().contains(query, ignoreCase = true) ||
+                book.intro.orEmpty().contains(query, ignoreCase = true) ||
+                book.latestChapterTitle.orEmpty().contains(query, ignoreCase = true) ||
+                book.wordCount.orEmpty().lowercase().contains(q)
         }
     }
 
@@ -742,7 +683,6 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
         val suite = enhance.selectedSuite ?: return
         val sourceUrl = suite.defaultSourceUrl ?: state.items.firstOrNull()?.bookSourceUrl ?: return
         val nextPage = enhance.suiteSearchPage + 1
-
         vm.updateUiState { it.copy(enhance = it.enhance.copy(suiteSearchLoading = true)) }
         vm.viewModelScope.launch(IO) {
             try {
@@ -777,6 +717,16 @@ class ExploreViewModelEnhance(private val vm: ExploreViewModel) {
     fun clearSuiteSearchJob() {
         suiteSearchJob?.cancel()
     }
+
+    private fun ExploreKind.hasChildren(): Boolean = !children.isNullOrEmpty()
+
+    private fun ExploreKind.targetUrl(): String? {
+        val actionTarget = if (type == ExploreKind.Type.url) action else null
+        return actionTarget?.trim()?.takeIf { it.isNotBlank() && !it.equals("null", true) }
+            ?: url?.trim()?.takeIf { it.isNotBlank() && !it.equals("null", true) }
+    }
+
+    private fun ExploreKind.isGroupHeader(): Boolean = targetUrl().isNullOrBlank() && !hasChildren()
 
     private companion object {
         const val DYNAMIC_LEVEL_PREFIX = "dynamic_level_"
