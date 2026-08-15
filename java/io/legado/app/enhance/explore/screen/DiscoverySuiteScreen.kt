@@ -14,16 +14,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import io.legado.app.data.entities.SearchBook
 import io.legado.app.domain.model.BookShelfState
-import io.legado.app.enhance.explore.model.DiscoverySuite
-import io.legado.app.enhance.explore.model.DiscoverySuiteWidget
-import io.legado.app.enhance.explore.model.DiscoverySuiteWidgetTarget
 import io.legado.app.enhance.explore.model.DiscoverySuiteWidgetType
 import io.legado.app.enhance.explore.ui.ModernDiscoveryFilterBar
 import io.legado.app.ui.main.explore.ExploreIntent
 import io.legado.app.ui.main.explore.ExploreViewModel
 import io.legado.app.ui.widget.components.EmptyMessage
 import io.legado.app.ui.widget.components.LoadMoreFooter
-import io.legado.app.ui.widget.components.explore.*
+import io.legado.app.ui.widget.components.explore.DiscoverySuiteHeader
+import io.legado.app.ui.widget.components.explore.DiscoverySuiteHorizontalBooksWidget
 import io.legado.app.ui.widget.components.progressIndicator.AppContainedLoadingIndicator
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.coroutines.launch
@@ -48,7 +46,6 @@ fun DiscoverySuiteScreen(
             it.type == DiscoverySuiteWidgetType.HorizontalBooks.type
         }
     }
-
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (suite == null) {
@@ -102,9 +99,14 @@ fun DiscoverySuiteScreen(
                 when (DiscoverySuiteWidgetType.from(widget.type)) {
                     DiscoverySuiteWidgetType.TagBar -> {
                         item(key = widget.id) {
-                            DiscoverySuiteTagBarWidget(
+                            ModernDiscoveryFilterBar(
                                 title = widget.title,
-                                targets = if (widget.isDynamic) (state.enhance.dynamicCategoryTargets.takeIf { it.isNotEmpty() } ?: widget.targets) else widget.targets,
+                                targets = if (widget.isDynamic) {
+                                    state.enhance.dynamicCategoryTargets.takeIf { it.isNotEmpty() }
+                                        ?: widget.targets
+                                } else {
+                                    widget.targets
+                                },
                                 selectedTargetTitle = state.enhance.selectedWidgetTargets[widget.id],
                                 onTargetClick = { target ->
                                     onIntent(ExploreIntent.SelectWidgetTarget(widget.id, target))
@@ -112,13 +114,14 @@ fun DiscoverySuiteScreen(
                             )
                         }
                     }
+
                     DiscoverySuiteWidgetType.RankButtons -> {
                         item(key = widget.id) {
                             val rankTargets = state.enhance.dynamicRankTargets
                             val groupIndex = if (widget.title == "榜单") 1 else 0
                             val group = rankTargets.getOrNull(groupIndex) ?: widget.targets
 
-                            DiscoverySuiteRankButtonsWidget(
+                            ModernDiscoveryFilterBar(
                                 title = widget.title,
                                 targets = group,
                                 selectedTargetTitle = state.enhance.selectedWidgetTargets[widget.id],
@@ -128,6 +131,7 @@ fun DiscoverySuiteScreen(
                             )
                         }
                     }
+
                     DiscoverySuiteWidgetType.HorizontalBooks,
                     DiscoverySuiteWidgetType.WaterfallBooks,
                     DiscoverySuiteWidgetType.BookList -> {
@@ -184,6 +188,7 @@ fun DiscoverySuiteScreen(
                                     )
                                 }
                             }
+
                             2 -> {
                                 val chunks = books.chunked(widget.gridCount)
                                 itemsIndexed(
@@ -212,6 +217,7 @@ fun DiscoverySuiteScreen(
                                     }
                                 }
                             }
+
                             else -> {
                                 item(key = widget.id) {
                                     DiscoverySuiteHorizontalBooksWidget(
@@ -248,6 +254,7 @@ fun DiscoverySuiteScreen(
                             }
                         }
                     }
+
                     else -> {}
                 }
             }
