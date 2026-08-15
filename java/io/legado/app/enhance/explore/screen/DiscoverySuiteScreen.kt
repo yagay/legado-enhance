@@ -18,6 +18,7 @@ import io.legado.app.enhance.explore.model.DiscoverySuite
 import io.legado.app.enhance.explore.model.DiscoverySuiteWidget
 import io.legado.app.enhance.explore.model.DiscoverySuiteWidgetTarget
 import io.legado.app.enhance.explore.model.DiscoverySuiteWidgetType
+import io.legado.app.enhance.explore.ui.ModernDiscoveryFilterBar
 import io.legado.app.ui.main.explore.ExploreIntent
 import io.legado.app.ui.main.explore.ExploreViewModel
 import io.legado.app.ui.widget.components.EmptyMessage
@@ -73,7 +74,7 @@ fun DiscoverySuiteScreen(
         ) {
             state.enhance.dynamicSelectors.forEach { selector ->
                 item(key = selector.id) {
-                    DiscoverySuiteTagBarWidget(
+                    ModernDiscoveryFilterBar(
                         title = selector.title,
                         targets = selector.targets,
                         selectedTargetTitle = selector.selectedTitle,
