@@ -1,0 +1,101 @@
+name: Wire Modern Filter Runtime
+
+on:
+  push:
+    branches: [MD3]
+    paths:
+      - '.github/workflows/patch-modern-filter-runtime.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Patch ExploreViewModelEnhance
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('java/io/legado/app/enhance/explore/vm/ExploreViewModelEnhance.kt')
+          text = path.read_text()
+
+          anchor = 'import io.legado.app.data.entities.rule.ExploreKind\n'
+          repl = anchor + 'import io.legado.app.enhance.explore.builder.ModernExploreFilterRuntime\n'
+          if 'ModernExploreFilterRuntime' not in text:
+              if anchor not in text:
+                  raise SystemExit('import anchor missing')
+              text = text.replace(anchor, repl, 1)
+
+          start = text.index('    private fun rebuildSelectors(suite: DiscoverySuite, defaultSourceUrl: String) {')
+          end = text.index('    private fun loadBookWidgetData(', start)
+
+          new_block = '''    private fun rebuildSelectors(suite: DiscoverySuite, defaultSourceUrl: String) {
+        if (allSourceKinds.isEmpty()) return
+
+        val config = DiscoverySuiteStore.load()
+        val stateSelections = vm.uiState.value.enhance.selectedWidgetTargets
+        val persisted = config.lastSelectedTargets
+            .filterKeys { it.startsWith("${defaultSourceUrl}_$DYNAMIC_LEVEL_PREFIX") }
+            .mapKeys { (key, _) -> key.removePrefix("${defaultSourceUrl}_") }
+
+        val runtime = ModernExploreFilterRuntime.build(
+            kinds = allSourceKinds,
+            sourceUrl = defaultSourceUrl,
+            selections = stateSelections,
+            persistedSelections = persisted
+        )
+
+        val finalSelections = runtime.selectedTitles.toMutableMap()
+        runtime.currentUrl?.let { finalSelections["current_url"] = it }
+
+        vm.updateUiState { state ->
+            val preserved = state.enhance.selectedWidgetTargets
+                .filterKeys { key -> !key.startsWith(DYNAMIC_LEVEL_PREFIX) && key != "current_url" }
+            state.copy(
+                enhance = state.enhance.copy(
+                    dynamicSelectors = runtime.rows.toImmutableList(),
+                    // 旧的 category/rank/channel 派生状态不再参与瀑布流分类渲染，
+                    // 防止与现代运行时生成的行重复或顺序冲突。
+                    dynamicCategoryTargets = persistentListOf(),
+                    dynamicRankTargets = persistentListOf(),
+                    dynamicChannelTargets = persistentListOf(),
+                    channelCategoryMap = persistentMapOf(),
+                    selectedWidgetTargets = (preserved + finalSelections).toImmutableMap()
+                )
+            )
+        }
+
+        runtime.currentUrl?.let { url ->
+            vm.updateUiState {
+                it.copy(
+                    enhance = it.enhance.copy(
+                        widgetBooks = persistentMapOf(),
+                        widgetLoading = persistentMapOf(),
+                        widgetPages = persistentMapOf(),
+                        widgetIsEnd = persistentMapOf()
+                    )
+                )
+            }
+            loadBookWidgetData(suite, url, defaultSourceUrl)
+        }
+    }
+
+'''
+          text = text[:start] + new_block + text[end:]
+          path.write_text(text)
+          PY
+
+      - name: Commit
+        run: |
+          git config user.name "Jie"
+          git config user.email "1614094+yagay@users.noreply.github.com"
+          git add java/io/legado/app/enhance/explore/vm/ExploreViewModelEnhance.kt
+          git diff --cached --quiet && exit 0
+          git commit -m "feat: use modern filter runtime for waterfall classifications"
+          git push origin HEAD:MD3
